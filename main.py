@@ -1,140 +1,154 @@
 from fastmcp import FastMCP
 import os
-import aiosqlite  # Changed: sqlite3 → aiosqlite
-import tempfile
+import sqlite3
+import aiosqlite
+import json
 
-# Use temporary directory which should be writable
-TEMP_DIR = tempfile.gettempdir()
-DB_PATH = os.path.join(os.path.dirname(__file__), "expenses.db")
-CATEGORIES_PATH = os.path.join(os.path.dirname(__file__), "categories.json")
+# -----------------------------
+# PATHS
+# -----------------------------
+BASE_DIR = os.path.dirname(__file__)
+DB_PATH = os.path.join(BASE_DIR, "expenses.db")
+CATEGORIES_PATH = os.path.join(BASE_DIR, "categories.json")
 
-print(f"Database path: {DB_PATH}")
+print("DB:", DB_PATH)
 
 mcp = FastMCP("ExpenseTracker")
 
+# -----------------------------
+# INIT DB
+# -----------------------------
+def init_db():
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                amount REAL NOT NULL,
+                category TEXT NOT NULL,
+                subcategory TEXT DEFAULT '',
+                note TEXT DEFAULT ''
+            )
+        """)
 
-def init_db():  # Keep as sync for initialization
-    try:
-        # Use synchronous sqlite3 just for initialization
-        import sqlite3
-        with sqlite3.connect(DB_PATH) as c:
-            c.execute("PRAGMA journal_mode=WAL")
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS expenses(
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date TEXT NOT NULL,
-                    amount REAL NOT NULL,
-                    category TEXT NOT NULL,
-                    subcategory TEXT DEFAULT '',
-                    note TEXT DEFAULT ''
-                )
-            """)
-            # Test write access
-            c.execute("INSERT OR IGNORE INTO expenses(date, amount, category) VALUES ('2000-01-01', 0, 'test')")
-            c.execute("DELETE FROM expenses WHERE category = 'test'")
-            print("Database initialized successfully with write access")
-    except Exception as e:
-        print(f"Database initialization error: {e}")
-        raise
+        db.commit()
 
+    print("Database ready")
 
-# Initialize database synchronously at module load
 init_db()
 
-
+# -----------------------------
+# TOOL 1: ADD
+# -----------------------------
 @mcp.tool()
-async def add_expense(date, amount, category, subcategory="", note=""):  # Changed: added async
-    '''Add a new expense entry to the database.'''
-    try:
-        async with aiosqlite.connect(DB_PATH) as c:  # Changed: added async
-            cur = await c.execute(  # Changed: added await
-                "INSERT INTO expenses(date, amount, category, subcategory, note) VALUES (?,?,?,?,?)",
-                (date, amount, category, subcategory, note)
-            )
-            expense_id = cur.lastrowid
-            await c.commit()  # Changed: added await
-            return {"status": "success", "id": expense_id, "message": "Expense added successfully"}
-    except Exception as e:  # Changed: simplified exception handling
-        if "readonly" in str(e).lower():
-            return {"status": "error", "message": "Database is in read-only mode. Check file permissions."}
-        return {"status": "error", "message": f"Database error: {str(e)}"}
-
-
-@mcp.tool()
-async def list_expenses(start_date, end_date):  # Changed: added async
-    '''List expense entries within an inclusive date range.'''
-    try:
-        async with aiosqlite.connect(DB_PATH) as c:  # Changed: added async
-            cur = await c.execute(  # Changed: added await
-                """
-                SELECT id, date, amount, category, subcategory, note
-                FROM expenses
-                WHERE date BETWEEN ? AND ?
-                ORDER BY date DESC, id DESC
-                """,
-                (start_date, end_date)
-            )
-            cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, r)) for r in await cur.fetchall()]  # Changed: added await
-    except Exception as e:
-        return {"status": "error", "message": f"Error listing expenses: {str(e)}"}
-
-
-@mcp.tool()
-async def summarize(start_date, end_date, category=None):  # Changed: added async
-    '''Summarize expenses by category within an inclusive date range.'''
-    try:
-        async with aiosqlite.connect(DB_PATH) as c:  # Changed: added async
-            query = """
-                SELECT category, SUM(amount) AS total_amount, COUNT(*) as count
-                FROM expenses
-                WHERE date BETWEEN ? AND ?
+async def add_expense(date, amount, category, subcategory="", note=""):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
             """
-            params = [start_date, end_date]
+            INSERT INTO expenses(date, amount, category, subcategory, note)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (date, amount, category, subcategory, note)
+        )
+        await db.commit()
 
-            if category:
-                query += " AND category = ?"
-                params.append(category)
-
-            query += " GROUP BY category ORDER BY total_amount DESC"
-
-            cur = await c.execute(query, params)  # Changed: added await
-            cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, r)) for r in await cur.fetchall()]  # Changed: added await
-    except Exception as e:
-        return {"status": "error", "message": f"Error summarizing expenses: {str(e)}"}
-
-
-@mcp.resource("expense:///categories", mime_type="application/json")  # Changed: expense:// → expense:///
-def categories():
-    try:
-        # Provide default categories if file doesn't exist
-        default_categories = {
-            "categories": [
-                "Food & Dining",
-                "Transportation",
-                "Shopping",
-                "Entertainment",
-                "Bills & Utilities",
-                "Healthcare",
-                "Travel",
-                "Education",
-                "Business",
-                "Other"
-            ]
+        return {
+            "status": "ok",
+            "id": cur.lastrowid
         }
 
-        try:
-            with open(CATEGORIES_PATH, "r", encoding="utf-8") as f:
-                return f.read()
-        except FileNotFoundError:
-            import json
-            return json.dumps(default_categories, indent=2)
-    except Exception as e:
-        return f'{{"error": "Could not load categories: {str(e)}"}}'
+# -----------------------------
+# TOOL 2: LIST
+# -----------------------------
+@mcp.tool()
+async def list_expenses(start_date, end_date):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT id, date, amount, category, subcategory, note
+            FROM expenses
+            WHERE date BETWEEN ? AND ?
+            ORDER BY date DESC
+            """,
+            (start_date, end_date)
+        )
 
+        rows = await cur.fetchall()
 
-# Start the server
+        return [
+            {
+                "id": r[0],
+                "date": r[1],
+                "amount": r[2],
+                "category": r[3],
+                "subcategory": r[4],
+                "note": r[5],
+            }
+            for r in rows
+        ]
+
+# -----------------------------
+# TOOL 3: SUMMARY
+# -----------------------------
+@mcp.tool()
+async def summarize(start_date, end_date, category=None):
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        query = """
+            SELECT category, SUM(amount), COUNT(*)
+            FROM expenses
+            WHERE date BETWEEN ? AND ?
+        """
+
+        params = [start_date, end_date]
+
+        if category:
+            query += " AND category = ?"
+            params.append(category)
+
+        query += " GROUP BY category ORDER BY SUM(amount) DESC"
+
+        cur = await db.execute(query, params)
+        rows = await cur.fetchall()
+
+        return [
+            {
+                "category": r[0],
+                "total": r[1],
+                "count": r[2]
+            }
+            for r in rows
+        ]
+
+# -----------------------------
+# RESOURCE
+# -----------------------------
+@mcp.resource("expense://categories", mime_type="application/json")
+def categories():
+    default = {
+        "categories": [
+            "Food & Dining",
+            "Transportation",
+            "Shopping",
+            "Entertainment",
+            "Bills & Utilities",
+            "Healthcare",
+            "Travel",
+            "Education",
+            "Business",
+            "Other"
+        ]
+    }
+
+    try:
+        with open(CATEGORIES_PATH, "r", encoding="utf-8") as f:
+            return f.read()
+    except:
+        return json.dumps(default, indent=2)
+
+# -----------------------------
+# RUN SERVER (IMPORTANT FIX)
+# -----------------------------
 if __name__ == "__main__":
-    mcp.run(transport="http", host="0.0.0.0", port=8000)
-    # mcp.run()
+    # ⭐ BEST FOR INSPECTOR (IMPORTANT)
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=8000)
