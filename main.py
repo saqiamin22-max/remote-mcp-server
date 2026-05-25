@@ -9,10 +9,8 @@ import json
 # -----------------------------
 BASE_DIR = os.path.dirname(__file__)
 
-DB_PATH = os.getenv(
-    "DB_PATH",
-    os.path.join(BASE_DIR, "expenses.db")
-)
+# IMPORTANT FIX: cloud-safe DB path
+DB_PATH = os.getenv("DB_PATH", "/tmp/expenses.db")
 
 CATEGORIES_PATH = os.path.join(BASE_DIR, "categories.json")
 
@@ -56,7 +54,10 @@ async def add_expense(date, amount, category, subcategory="", note=""):
         )
         await db.commit()
 
-        return {"status": "ok", "id": cur.lastrowid}
+        return {
+            "status": "ok",
+            "id": cur.lastrowid
+        }
 
 # -----------------------------
 # TOOL 2: LIST EXPENSES
@@ -126,7 +127,7 @@ async def summarize(start_date, end_date, category=None):
 # -----------------------------
 @mcp.resource("expense://categories", mime_type="application/json")
 def categories():
-    default = {
+    default_categories = {
         "categories": [
             "Food & Dining",
             "Transportation",
@@ -145,7 +146,7 @@ def categories():
         with open(CATEGORIES_PATH, "r", encoding="utf-8") as f:
             return f.read()
     except:
-        return json.dumps(default, indent=2)
+        return json.dumps(default_categories, indent=2)
 
 # -----------------------------
 # RUN SERVER (DEPLOY SAFE)
