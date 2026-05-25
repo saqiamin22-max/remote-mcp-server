@@ -5,13 +5,18 @@ import aiosqlite
 import json
 
 # -----------------------------
-# PATHS
+# CONFIG (CLOUD SAFE)
 # -----------------------------
 BASE_DIR = os.path.dirname(__file__)
-DB_PATH = os.path.join(BASE_DIR, "expenses.db")
+
+DB_PATH = os.getenv(
+    "DB_PATH",
+    os.path.join(BASE_DIR, "expenses.db")
+)
+
 CATEGORIES_PATH = os.path.join(BASE_DIR, "categories.json")
 
-print("DB:", DB_PATH)
+print("DB PATH:", DB_PATH)
 
 mcp = FastMCP("ExpenseTracker")
 
@@ -30,7 +35,6 @@ def init_db():
                 note TEXT DEFAULT ''
             )
         """)
-
         db.commit()
 
     print("Database ready")
@@ -38,7 +42,7 @@ def init_db():
 init_db()
 
 # -----------------------------
-# TOOL 1: ADD
+# TOOL 1: ADD EXPENSE
 # -----------------------------
 @mcp.tool()
 async def add_expense(date, amount, category, subcategory="", note=""):
@@ -52,13 +56,10 @@ async def add_expense(date, amount, category, subcategory="", note=""):
         )
         await db.commit()
 
-        return {
-            "status": "ok",
-            "id": cur.lastrowid
-        }
+        return {"status": "ok", "id": cur.lastrowid}
 
 # -----------------------------
-# TOOL 2: LIST
+# TOOL 2: LIST EXPENSES
 # -----------------------------
 @mcp.tool()
 async def list_expenses(start_date, end_date):
@@ -147,8 +148,13 @@ def categories():
         return json.dumps(default, indent=2)
 
 # -----------------------------
-# RUN SERVER (IMPORTANT FIX)
+# RUN SERVER (DEPLOY SAFE)
 # -----------------------------
 if __name__ == "__main__":
-    # ⭐ BEST FOR INSPECTOR (IMPORTANT)
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", 8000))
+
+    mcp.run(
+        transport="streamable-http",
+        host="0.0.0.0",
+        port=port
+    )
